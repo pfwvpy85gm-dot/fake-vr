@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Fake VR</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#101526;color:white;font-family:Arial;overflow:hidden}
+#cam{position:fixed;width:100%;height:100%;object-fit:cover;transform:scaleX(-1);opacity:.55}
+canvas{position:fixed;width:100%;height:100%;inset:0;touch-action:none}
+#ui{position:fixed;top:15px;left:10px;right:10px;display:flex;justify-content:space-between;align-items:center;gap:8px}
+button{background:#665cff;color:white;border:0;border-radius:12px;padding:13px;font-size:15px}
+#info{background:#111b2add;padding:12px;border-radius:12px;font-size:13px}
+#box{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:#131c31f5;padding:22px;border-radius:20px;width:88%;max-width:380px;text-align:center}
+h1{margin-top:0}
+p{line-height:1.5}
+</style>
+</head>
+<body>
+<video id="cam" autoplay muted playsinline></video>
+<canvas id="c"></canvas>
+<div id="ui">
+<div id="info">🖐️ Fake VR<br><span id="msg">Нажми «Старт»</span></div>
+<button onclick="resetGame()">🔄 Сброс</button>
+</div>
+<div id="box">
+<h1>🖐️ Fake VR</h1>
+<p>Показывай руку камере! Соедини большой и указательный пальцы, чтобы хватать шары, и разомкни их, чтобы бросать.</p>
+<button id="start">📷 Старт</button>
+<p id="error"></p>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+<script>
+const video=document.getElementById('cam');
+const canvas=document.getElementById('c');
+const ctx=canvas.getContext('2d');
+const msg=document.getElementById('msg');
+const error=document.getElementById('error');
+let W,H,hand=null,previous=null,held=null,pinched=false;
+let objects=[];
+
+function resize(){
+ W=canvas.width=innerWidth*devicePixelRatio;
+ H=canvas.height=innerHeight*devicePixelRatio;
+}
+addEventListener('resize',resize);
+resize();
+
+function resetGame(){
+ objects=[];
+ for(let i=0;i<8;i++){
+  objects.push({
+   x:W*(.15+Math.random()*.7),
+   y:H*(.2+Math.random()*.6),
+   r:22*devicePixelRatio,
+   vx:0,vy:0,
+   color:['#56eaff','#ff6cb8','#ffe36a','#a18bff'][i%4]
+  });
+ }
+ held=null;
+}
+resetGame();
+
+function results(res){
+ const lm=res.multiHandLandmarks?.[0];
+ if(!lm){hand=null;previous=null;return}
+ const a=lm[4],b=lm[8];
+ const p={x:(a.x+b.x)/2,y:(a.y+b.y)/2};
+ const close=Math.hypot(a.x-b.x,a.y-b.y)<.065;
+ hand={x:1-p.x,y:p.y,close,points:lm};
+ if(close&&!pinched&&!held){
+  const x=hand.x*W,y=hand.y*H;
+  held=objects.find(o=>Math.hypot(o.x-x,o.y-y)<o.r+65*devicePixelRatio)||null;
+ }
+ if(held&&close){
+  held.x=hand.x*W;
+  held.y=hand.y*H;
+  held.vx=held.vy=0;
+ }
+ if(held&&!close){
+  held.vx=previous?(hand.x-previous.x)*W*.8:0;
+  held.vy=previous?(hand.y-previous.y)*H*.8:0;
+  held=null;
+ }
+ pinched=close;
+ previous={x:hand.x,y:hand.y};
+ msg.textContent=close?'✊ Хватай и двигай!':'🖐️ Соедини два пальца';
+}
+
+function draw(){
+ requestAnimationFrame(draw);
+ ctx.clearRect(0,0,W,H);
+ for(const o of objects){
+  if(o!==held){
+   o.vy+=.12*devicePixelRatio;
+   o.x+=o.vx;o.y+=o.vy;
+   o.vx*=.99;o.vy*=.99;
+   if(o.y>H-o.r){o.y=H-o.r;o.vy*=-.7}
+   if(o.x<o.r||o.x>W-o.r)o.vx*=-.8;
+  }
+  const g=ctx.createRadialGradient(o.x-o.r*.3,o.y-o.r*.4,2,o.x,o.y,o.r);
+  g.addColorStop(0,'white');g.addColorStop(.35,o.color);g.addColorStop(1,'#202040');
+  ctx.fillStyle=g;
+  ctx.shadowBlur=18*devicePixelRatio;
+  ctx.shadowColor=o.color;
+  ctx.beginPath();ctx.arc(o.x,o.y,o.r,0,Math.PI*2);ctx.fill();
+  ctx.shadowBlur=0;
+ }
+ if(hand){
+  const x=hand.x*W,y=hand.y*H;
+  ctx.strokeStyle='#79ffff';
+  ctx.lineWidth=4*devicePixelRatio;
+  ctx.lineCap='round';
+  const pts=hand.points.map(p=>({x:(1-p.x)*W,y:p.y*H}));
+  for(const chain of [[0,1,2,3,4],[0,5,6,7,8],[0,9,10,11,12],[0,13,14,15,16],[0,17,18,19,20],[5,9,13,17]]){
+   ctx.beginPath();
+   chain.forEach((n,i)=>i?ctx.lineTo(pts[n].x,pts[n].y):ctx.moveTo(pts[n].x,pts[n].y));
+   ctx.stroke();
+  }
+ }
+}
+draw();
+
+document.getElementById('start').onclick=async()=>{
+ const btn=document.getElementById('start');
+ btn.disabled=true;
+ error.textContent='Загружаю камеру...';
+ try{
+  const stream=await navigator.mediaDevices.getUserMedia({
+   video:{facingMode:'user',width:640,height:480},audio:false
+  });
+  video.srcObject=stream;
+  await video.play();
+  if(typeof Hands==='undefined')throw Error('Нет интернета для загрузки распознавания рук.');
+  const tracker=new Hands({
+   locateFile:f=>'https://cdn.jsdelivr.net/npm/@mediapipe/hands/'+f
+  });
+  tracker.setOptions({
+   maxNumHands:1,modelComplexity:0,
+   minDetectionConfidence:.55,minTrackingConfidence:.5
+  });
+  tracker.onResults(results);
+  let busy=false;
+  async function loop(){
+   if(video.readyState>=2&&!busy){
+    busy=true;
+    try{await tracker.send({image:video})}catch(e){}
+    busy=false;
+   }
+   setTimeout(loop,50);
+  }
+  document.getElementById('box').style.display='none';
+  loop();
+ }catch(e){
+  error.textContent='Ошибка: '+e.message+
+  '. Открой сайт через HTTPS в Safari.';
+  btn.disabled=false;
+ }
+};
+</script>
+</body>
+</html>
